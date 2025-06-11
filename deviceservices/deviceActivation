@@ -1,6 +1,19 @@
 <?php
+/**
+ * deviceActivation.php
+ *
+ * This script handles iDevice activation requests. Its primary functions are:
+ * 1. Parsing activation information sent by an iDevice.
+ * 2. Generating and signing a device certificate using a local Certificate Authority (CA).
+ * 3. Generating and signing an account token.
+ * 4. Returning an activation record to the device.
+ *
+ * It relies on `config.php` for various configuration parameters including paths and keys.
+ */
 include('tools/producttypes.php');
 
+// Expects base64 encoded XML data containing device activation information.
+// This data typically includes device identifiers, a certificate request, and other activation-related parameters.
 $activation= (array_key_exists('activation-info-base64', $_POST) 
 			  ? base64_decode($_POST['activation-info-base64']) 
 			  : array_key_exists('activation-info', $_POST) ? $_POST['activation-info'] : '');
@@ -19,6 +32,8 @@ $decodedrequest = new DOMDocument;
 $decodedrequest->loadXML($activationDecoded);
 $nodes = $decodedrequest->getElementsByTagName('dict')->item(0)->getElementsByTagName('*');
 
+// Main parsing loop: Extracts key device identifiers, certificate requests, and other data from the decoded XML.
+// The XML structure is a plist (Property List) containing key-value pairs.
 for ($i = 0; $i < $nodes->length - 1; $i=$i+2)
 {
 	#${$nodes->item($i)->nodeValue} = preg_match('/(true|false)/', $nodes->item($i + 1)->nodeName) ? $nodes->item($i + 1)->nodeName : $nodes->item($i + 1)->nodeValue;
@@ -29,7 +44,7 @@ for ($i = 0; $i < $nodes->length - 1; $i=$i+2)
 		case "DeviceCertRequest": $deviceCertRequest = base64_decode($nodes->item($i + 1)->nodeValue); break;
 		case "DeviceClass": $deviceClass = $nodes->item($i + 1)->nodeValue; break;
 		case "SerialNumber": $serialNumber = $nodes->item($i + 1)->nodeValue; break;
-		case "UniqueDeviceID": $uniqueDiviceID = $nodes->item($i + 1)->nodeValue; break;
+		case "UniqueDeviceID": $uniqueDeviceID = $nodes->item($i + 1)->nodeValue; break;
 		case "InternationalMobileEquipmentIdentity": $imei = $nodes->item($i + 1)->nodeValue; break;
 		case "InternationalMobileSubscriberIdentity": $imsi = $nodes->item($i + 1)->nodeValue; break;
 		case "IntegratedCircuitCardIdentity": $iccid = $nodes->item($i + 1)->nodeValue; break;
@@ -40,6 +55,41 @@ for ($i = 0; $i < $nodes->length - 1; $i=$i+2)
 	}
 }
 
+// Input Validation: Check for essential variables parsed from the XML.
+// If critical information is missing, exit gracefully with an error message.
+// Provide defaults for non-critical or optional fields.
+if (!isset($deviceClass)) {
+    exit('Error: DeviceClass is missing from activation info.');
+}
+if (!isset($serialNumber)) {
+    exit('Error: SerialNumber is missing from activation info.');
+}
+if (!isset($uniqueDeviceID)) {
+    exit('Error: UniqueDeviceID is missing from activation info.');
+}
+if (!isset($activationRandomness)) {
+    exit('Error: ActivationRandomness is missing from activation info.');
+}
+if (!isset($deviceCertRequest)) {
+    exit('Error: DeviceCertRequest is missing from activation info.');
+}
+
+// Default for productType if not provided in activation info.
+if (!isset($productType)) {
+    $productType = 'UnknownDevice';
+}
+// Ensure $productNames entry exists for display purposes to prevent undefined index notice.
+if (!isset($productNames[$productType])) {
+    $productNames[$productType] = $productType;
+}
+
+// Default for activationState if not provided. Assumes 'Unactivated' if not specified.
+if (!isset($activationState)) {
+    $activationState = 'Unactivated';
+}
+
+// Handles devices that are already activated or in a state other than 'Unactivated'.
+// Responds with a message indicating the device is already handled and may show settings.
 if ($activationState !== 'Unactivated') #WildcardActivated, Activated, ??????
 {
 	echo '<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.1//EN" "http://www.w3.org/TR/xhtml11/DTD/xhtml11.dtd"><html xmlns="http://www.apple.com/itms/" lang="en"><head><meta http-equiv="Content-Type" content="text/html; charset=utf-8" /><meta name="keywords" content="iTunes Store" /><meta name="description" content="iTunes Store" /><title>iPhone Activation</title><link href="http://static.ips.apple.com/ipa_itunes/stylesheets/shared/common-min.css" charset="utf-8" rel="stylesheet" /><link href="http://static.ips.apple.com/deviceservices/stylesheets/styles.css" charset="utf-8" rel="stylesheet" /><link href="http://static.ips.apple.com/ipa_itunes/stylesheets/pages/IPAJingleEndPointErrorPage-min.css" charset="utf-8" rel="stylesheet" /><script id="protocol" type="text/x-apple-plist">
@@ -59,6 +109,9 @@ if ($activationState !== 'Unactivated') #WildcardActivated, Activated, ??????
 }
 
 # ----------------------------------- save request info ------------------------------------------
+// Save request information for logging and debugging purposes.
+// Creates a directory structure based on device class and serial number.
+// Stores raw and decoded request XML, certificate signing request (CSR), FairPlay cert chain, and GUID.
 $devicefolder = 'devices/'.$deviceClass.'/'.$serialNumber.'/';
 
 if (!file_exists('devices/'.$deviceClass.'/')) mkdir('devices/'.$deviceClass.'/', 0777, true);
@@ -74,6 +127,11 @@ file_put_contents($devicefolder.'GUID.txt', $guid);
 # -------------------------------------------------------------------------------------------------
 
 # ---------------------------------- Sign device certificate request ------------------------------
+// This section signs the device's Certificate Signing Request (CSR) using a local CA.
+// The openssl x509 -req command is used for this purpose.
+// Configuration for the CA (certificate file, private key file, extensions file, passphrase)
+// is sourced from `config.php` (implicitly through variables like $certs_path, $certs_pass).
+// The signing process uses SHA-256 as the digest algorithm.
 /*$privkey = array(file_get_contents('certs/original/iPhoneDeviceCA_private.key'),"minacriss");
 $devicecacert = file_get_contents('certs/original/iPhoneDeviceCA.crt');
 
@@ -99,34 +157,45 @@ $cert_sn = '0x02A590E676E2CEED3A99';
 #exec('c:\xampp\apache\bin\openssl.exe x509 -req -sha1 -in '.$devicefolder.'cert-request.csr -CA '.$certs_path.'iPhoneDeviceCA.crt -CAkey '.$certs_path.'iPhoneDeviceCA_private.key -out '.$devicefolder.'serverCASigned.crt -days '.
 #		$days.' -extfile '.$certs_path.'extensions_device.cnf -extensions usr_cert -set_serial '.$cert_sn.' -passin pass:'.$certs_pass);
 # for OpenServer
-exec('openssl x509 -req -sha1 -in '.$devicefolder.'cert-request.csr -CA '.$certs_path.'iPhoneDeviceCA.crt -CAkey '.$certs_path.'iPhoneDeviceCA_private.key -out '.$devicefolder.'serverCASigned.crt -days '.
+exec('openssl x509 -req -sha256 -in '.$devicefolder.'cert-request.csr -CA '.$certs_path.'iPhoneDeviceCA.crt -CAkey '.$certs_path.'iPhoneDeviceCA_private.key -out '.$devicefolder.'serverCASigned.crt -days '.
 		$days.' -extfile '.$certs_path.'extensions_device.cnf -extensions usr_cert -set_serial '.$cert_sn.' -passin pass:'.$certs_pass);
 
 $deviceCertificate=base64_encode(file_get_contents($devicefolder."serverCASigned.crt"));
 # -------------------------------------------------------------------------------------------------
 
 # -------------------------------------------- Sign account token -----------------------------------------
-#$accountToken = '{'."\n\t".'"ActivationRandomness" = "'.$activationRandomness.'";'."\n\t".'"UniqueDeviceID" = "'.$uniqueDiviceID.'";'."\n".'}';
+// This section generates and signs an account token.
+// The $accountToken is a JSON-like string (though not strictly JSON) containing various device-specific
+// details, activation randomness, URLs from config.php, and a wildcard ticket.
+#$accountToken = '{'."\n\t".'"ActivationRandomness" = "'.$activationRandomness.'";'."\n\t".'"UniqueDeviceID" = "'.$uniqueDeviceID.'";'."\n".'}';
 
+// TODO: The WildcardTicket is currently loaded from a static file.
+// For long-term compatibility with new iOS versions or device types,
+// this ticket might need to be dynamically fetched from Apple's servers
+// or updated regularly from other sources.
 $wildcardTicket=file_get_contents('certs/ext/wildcardticket.txt');
 $accountToken=
  '{'.(isset($imei) ? "\n\t".'"InternationalMobileEquipmentIdentity" = "'.$imei.'";' : '').
-	"\n\t".'"ActivityURL" = "https://albert.apple.com/deviceservices/activity";'.
+	"\n\t".'"ActivityURL" = "https://albert.apple.com/deviceservices/activity";'. // URL from config (implicitly, if refactored)
 	"\n\t".'"ActivationRandomness" = "'.$activationRandomness.'";'.
-	"\n\t".'"UniqueDeviceID" = "'.$uniqueDiviceID.'";'.
+	"\n\t".'"UniqueDeviceID" = "'.$uniqueDeviceID.'";'.
 	"\n\t".'"CertificateURL" = "https://albert.apple.com/deviceservices/certifyMe";'.
 	"\n\t".'"PhoneNumberNotificationURL" = "https://albert.apple.com/deviceservices/phoneHome";'.
 	"\n\t".'"WildcardTicket" = "'.$wildcardTicket.'";'.
 	"\n".
  '}';
+// The base64 encoded account token is then signed using openssl_sign and the private key
+// specified by 'certs/signature_private.key' (this should ideally be in config.php).
 $accountTokenBase64=base64_encode($accountToken);
-$pkeyid = openssl_pkey_get_private(file_get_contents("certs/signature_private.key"));
+$pkeyid = openssl_pkey_get_private(file_get_contents("certs/signature_private.key")); // Key path from config (implicitly)
 
 openssl_sign($accountTokenBase64, $signature, $pkeyid);
 openssl_free_key($pkeyid);
 # -------------------------------------------------------------------------------------------------
 
 $accountTokenSignature= base64_encode($signature);
+// These are FairPlay related data items, typically static unless FairPlay system changes.
+// Values are hardcoded here but ideally would be in config.php if they need to be managed.
 $accountTokenCertificateBase64 = 'LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0tCk1JSURaekNDQWsrZ0F3SUJBZ0lCQWpBTkJna3Foa2lHOXcwQkFRVUZBREI1TVFzd0NRWURWUVFHRXdKVlV6RVQKTUJFR0ExVUVDaE1LUVhCd2JHVWdTVzVqTGpFbU1DUUdBMVVFQ3hNZFFYQndiR1VnUTJWeWRHbG1hV05oZEdsdgpiaUJCZFhSb2IzSnBkSGt4TFRBckJnTlZCQU1USkVGd2NHeGxJR2xRYUc5dVpTQkRaWEowYVdacFkyRjBhVzl1CklFRjFkR2h2Y21sMGVUQWVGdzB3TnpBME1UWXlNalUxTURKYUZ3MHhOREEwTVRZeU1qVTFNREphTUZzeEN6QUoKQmdOVkJBWVRBbFZUTVJNd0VRWURWUVFLRXdwQmNIQnNaU0JKYm1NdU1SVXdFd1lEVlFRTEV3eEJjSEJzWlNCcApVR2h2Ym1VeElEQWVCZ05WQkFNVEYwRndjR3hsSUdsUWFHOXVaU0JCWTNScGRtRjBhVzl1TUlHZk1BMEdDU3FHClNJYjNEUUVCQVFVQUE0R05BRENCaVFLQmdRREZBWHpSSW1Bcm1vaUhmYlMyb1BjcUFmYkV2MGQxams3R2JuWDcKKzRZVWx5SWZwcnpCVmRsbXoySkhZdjErMDRJekp0TDdjTDk3VUk3ZmswaTBPTVkwYWw4YStKUFFhNFVnNjExVApicUV0K25qQW1Ba2dlM0hYV0RCZEFYRDlNaGtDN1QvOW83N3pPUTFvbGk0Y1VkemxuWVdmem1XMFBkdU94dXZlCkFlWVk0d0lEQVFBQm80R2JNSUdZTUE0R0ExVWREd0VCL3dRRUF3SUhnREFNQmdOVkhSTUJBZjhFQWpBQU1CMEcKQTFVZERnUVdCQlNob05MK3Q3UnovcHNVYXEvTlBYTlBIKy9XbERBZkJnTlZIU01FR0RBV2dCVG5OQ291SXQ0NQpZR3UwbE01M2cyRXZNYUI4TlRBNEJnTlZIUjhFTVRBdk1DMmdLNkFwaGlkb2RIUndPaTh2ZDNkM0xtRndjR3hsCkxtTnZiUzloY0hCc1pXTmhMMmx3YUc5dVpTNWpjbXd3RFFZSktvWklodmNOQVFFRkJRQURnZ0VCQUY5cW1yVU4KZEErRlJPWUdQN3BXY1lUQUsrcEx5T2Y5ek9hRTdhZVZJODg1VjhZL0JLSGhsd0FvK3pFa2lPVTNGYkVQQ1M5Vgp0UzE4WkJjd0QvK2Q1WlFUTUZrbmhjVUp3ZFBxcWpubTlMcVRmSC94NHB3OE9OSFJEenhIZHA5NmdPVjNBNCs4CmFia29BU2ZjWXF2SVJ5cFhuYnVyM2JSUmhUekFzNFZJTFM2alR5Rll5bVplU2V3dEJ1Ym1taWdvMWtDUWlaR2MKNzZjNWZlREF5SGIyYnpFcXR2eDNXcHJsanRTNDZRVDVDUjZZZWxpblpuaW8zMmpBelJZVHh0UzZyM0pzdlpEaQpKMDcrRUhjbWZHZHB4d2dPKzdidFcxcEZhcjBaakY5L2pZS0tuT1lOeXZDcndzemhhZmJTWXd6QUc1RUpvWEZCCjRkK3BpV0hVRGNQeHRjYz0KLS0tLS1FTkQgQ0VSVElGSUNBVEUtLS0tLQo=';
 $fairPlayKeyData = 'LS0tLS1CRUdJTiBDT05UQUlORVItLS0tLQpBQUVBQVIvcWRpY3lUdWJtMmxKTndMV1ZaT0xQSnpTSWF1MGJuT1lPSE10alZxc242dTFuY0Urb0ZQNkQ3VjNWCmplekJxQWNhRVpxUGNOT09yK3hFM2NkL1I0K1Q4OHMwSitFa0pQNnRPZzQ5U215ZkZUMlg0UDdYZExTNndEalAKY3piRmRDU0hpTVZmREJhY1pUaWxPNGNsdHllS3JzZHpLTlI5L3J5VXQ4TnJkY0VJd2lHWTBjYjNpcExLUnhHUwpYSWFMMnpYMy9HeE14UW0yRzdzL0IvWDBkdWEwd084enB6ZXE1bHkwc1lPQjE5cUdwaytKQ0hSaUtyUC9neFRaClJjZC9tTjVaM25WUEY4Qld2VEQ5UElvYldDZENxc3dCZzBvK1VyNnExZHFsZEpPM0FSOEFWTzFLUEFrVC8wV1QKdkR0MFpBbDJod3JEclpXdHJSd3RDNUlXZi9DY2UwaDZ0UXB4bDM3akFBWkdqcWNFM3F5dG4rdmh1SVQ2WklTUQpyK2x0T1B0Mk5vK3plVFh2TVExalJWUXlyRzFCNzRMWEpGcU1nQytGZGgzMDYvamRoMEtkeEVoeHdHanR4VGpICk5YRkhhV2Y0Nm9UaGVmWTBDM3NSclh1cENRSjg1ODNiRWFuUG8yUk1FL1dkY0pDODJFeEZma3FGRjNPSkU5dy8KV2w3NkFUZlVGaUVYRUFpUHVOQXk4Zlhhazk0Y3FyREhXeS9YbTFRV0o3Rnd4eDYzM2RnUXBFVWExSjBMaTNYZwpqaWJmczZQdDdpUkUzK3ZhTWViVW1BajZWZnczUjBQL253SzhzNnhubDJ1MUZsdEdXTkQxRWdoRVNEM1ExRk5mCkxlVWpOL1gwVmE0TEFzU0tGZ2NPSlloRi9renRLUFFqd0ZVNVFtd1FSeUI3aVhHM3lDbmdFZml6d3hhVEtUQzUKRmZFbi8xa3JlYndtOGZ3bW04NjllL3ZhTk81K285MFFibG9weDNUbnFRUWwyalYyZjhoa3FlYTlpUWRoL0JlTwpLUjVmcjR0bW9PSGNuUS9tRVNVZEUwdUcrRjhteGRBNVlUTzRhaElzaEZZajlEZzFVQkQvNGZHdWxkaCszZU50CkJQUVVveG5jTWd5VnFMMFRjaE90TXFOc3NnYkZXemUwRHBiMWU3OVVHUlJqdXN0QmlFTG9vY2s4amxtRWdwclgKZ3dLSmU5dkVqMDQ3Y2FUS2NSci9zKzN3b1ZkUWNQNDdZVEw0aVZKZ01jRHlZRFNGYk5lc3JXdlZ1KzhPZlJ0SwpUSEM0T2xQTmZWRTNXNXQyRWYwL0JlVERnL0FiUzUrSWNhSDdpeUhVZWRHWmxkRHpCWnhRMzdRRUNaYUZpUnpiCksrZWNXbWNMOXk3QnRoNGtaV3hJOE9vSzc3akQrb1JmWlVIZHM5OXNWbnNGZVRuQUVyL0RzaXVwTnlTRzZSdEcKVXJpOWZnRUYzUjJEb0lWaTlxQjdIUmJnM1VFTnZORlVFSVQ4VTdkb1lFVFBJSEVCUlVUU3k0MnhvbnVKNmxCNgpuOEEzaVpBTkR3N2ZzZWJUVzF6bnZuYmJGcC81YUhzMFJVNmNRenBTRlRIanRKb1hSQ091Y2RBRDNmY3VhMWhYCk14WENYV0drWDJOZnA2OFQvV0J4K0tlTDB0NGRFOXZrVnV4aEhjTjFZYS95OWZ2eFZZQmpSSVBEQXNBSGFhUnMKY05oZUdpTFNCTWh0Ui9kblVUMnA1aHhDRWNobnRjSTI5K21mYlV2VXIydVNrV3I4dFJVV0I0YjFZdmlVbUJScQpuQUV4L29WRHJlTDcvMnUxY0FhaHRhYWdaanBRUzlBNmhBSHA4RWVJNkg5dnZxcUtHMXY0TW9qa3NnalNlWDBuCnRWcHl0Yjg4TFZxNHRRNmp6U21BcXNzbmRzNmgwZzZCUHpFSWxFdDlLWWZLeURhbXZyOXM0czRZaldDcEgxT2UKL2ZMbEhYUzRURUMwOXdUYnpjQWw4dmZqUFpMdmpnMURyalZsUWU5K1FINGgrMElECi0tLS0tRU5EIENPTlRBSU5FUi0tLS0tCg==';
 #$fairPlayKeyData = base64_encode(file_get_contents('certs/ext/FairPlayKeyData.pem'));
@@ -136,6 +205,9 @@ $fairPlayKeyData = 'LS0tLS1CRUdJTiBDT05UQUlORVItLS0tLQpBQUVBQVIvcWRpY3lUdWJtMmxK
 file_put_contents($devicefolder.'account-token.txt', $accountToken);
 file_put_contents($devicefolder.'signature.txt', $accountTokenSignature);
 
+// Final Response: Constructs the activation record as an HTML page containing a plist.
+// This plist includes the signed device certificate, account token, and other FairPlay data.
+// This is the data sent back to the iDevice to complete the activation process.
 echo 
 '<!DOCTYPE html><html><head><meta http-equiv="Content-Type" content="text/html; charset=utf-8" /><meta name="keywords" content="iTunes Store" /><meta name="description" content="iTunes Store" /><title>iPhone Activation</title><link href="http://static.ips.apple.com/ipa_itunes/stylesheets/shared/common-min.css" charset="utf-8" rel="stylesheet" /><link href="http://static.ips.apple.com/deviceservices/stylesheets/styles.css" charset="utf-8" rel="stylesheet" /><link href="http://static.ips.apple.com/ipa_itunes/stylesheets/pages/IPAJingleEndPointErrorPage-min.css" charset="utf-8" rel="stylesheet" /><link href="resources/auth_styles.css" charset="utf-8" rel="stylesheet" /><script id="protocol" type="text/x-apple-plist">
 <plist version="1.0">
@@ -144,6 +216,16 @@ echo
 		<dict>
 			<key>activation-record</key>
 			<dict>
+				<!--
+				 TODO: The 'AccountTokenCertificate' and 'FairPlayKeyData' are currently sourced
+				 from configuration (originally hardcoded). These are highly sensitive to iOS
+				 versions and device models. For accurate activation of newer devices,
+				 these blobs would likely need to be:
+				   a) Dynamically fetched from Apple's services if an API exists (unlikely for these specific items).
+				   b) Regularly updated by analyzing activation records from new devices/iOS versions.
+				   c) Obtained through other reverse engineering efforts.
+				 Using outdated versions here will likely lead to activation failures for new devices.
+				-->
 				<key>FairPlayKeyData</key>
 				<data>'.$fairPlayKeyData.'</data>
 				<key>AccountTokenCertificate</key>
@@ -170,7 +252,7 @@ echo
 			<table class="message-text">
 				<tr><td>iOSv:</td><td>'.$productVersion.'</td></tr>
 				<tr><td>ARND:</td><td>'.$activationRandomness.'</td></tr>
-				<tr><td>UDID:</td><td>'.$uniqueDiviceID.'</td></tr>
+				<tr><td>UDID:</td><td>'.$uniqueDeviceID.'</td></tr>
 				<tr><td>ASN:</td><td>'.(isset($serialNumber) ? $serialNumber : "-").'</td></tr>
 				<tr><td>UCID:</td><td>'.(isset($ucid) ? $ucid : "-").'</td></tr>								
 				<tr><td>ICCID:</td><td>'.(isset($iccid) ? $iccid : "-").'</td></tr>
