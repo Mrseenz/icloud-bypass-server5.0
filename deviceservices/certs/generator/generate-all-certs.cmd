@@ -7,17 +7,17 @@ REM --------
 REM iPhone CA
 openssl req -new -x509 -keyout iPhoneCA_private.key -out iPhoneCA.crt -days 3653 -set_serial 0x17 -config extensions_iphone_ca.cnf -reqexts v3_req -extensions v3_req -passout pass:icloud
 openssl x509 -x509toreq -in iPhoneCA.crt -out iPhoneCA.csr -signkey iPhoneCA_private.key -passin pass:icloud
-openssl x509 -req -in iPhoneCA.csr -CA RootCA.crt -CAkey RootCA_private.key -out iPhoneCA.crt -days 3653 -extfile extensions_iphone_ca.cnf -extensions v3_req  -set_serial 0x17 -passin pass:icloud
+openssl x509 -req -sha256 -in iPhoneCA.csr -CA RootCA.crt -CAkey RootCA_private.key -out iPhoneCA.crt -days 3653 -extfile extensions_iphone_ca.cnf -extensions v3_req  -set_serial 0x17 -passin pass:icloud
 REM --------
 REM iPhone Device CA
 openssl req -new -x509 -keyout iPhoneDeviceCA_private.key -out iPhoneDeviceCA.crt -days 3653 -set_serial 0x01 -config extensions_device_ca.cnf -reqexts v3_req -extensions v3_req -passout pass:icloud
 openssl x509 -x509toreq -in iPhoneDeviceCA.crt -out iPhoneDeviceCA.csr -signkey iPhoneDeviceCA_private.key -passin pass:icloud
-openssl x509 -req -in iPhoneDeviceCA.csr -CA iPhoneCA.crt -CAkey iPhoneCA_private.key -out iPhoneDeviceCA.crt -days 3653 -extfile extensions_device_ca.cnf -extensions v3_req  -set_serial 0x01 -passin pass:icloud
+openssl x509 -req -sha256 -in iPhoneDeviceCA.csr -CA iPhoneCA.crt -CAkey iPhoneCA_private.key -out iPhoneDeviceCA.crt -days 3653 -extfile extensions_device_ca.cnf -extensions v3_req  -set_serial 0x01 -passin pass:icloud
 REM --------
 REM iPhone Activation
 openssl req -new -x509 -keyout iPhoneActivation_private.key -out iPhoneActivation.crt -days 3653 -set_serial 0x02 -config extensions_activation.cnf -reqexts v3_req -extensions v3_req -passout pass:icloud
 openssl x509 -x509toreq -in iPhoneActivation.crt -out iPhoneActivation.csr -signkey iPhoneActivation_private.key -passin pass:icloud
-openssl x509 -req -in iPhoneActivation.csr -CA iPhoneCA.crt -CAkey iPhoneCA_private.key -out iPhoneActivation.crt -days 3653 -extfile extensions_activation.cnf -extensions v3_req  -set_serial 0x02 -passin pass:icloud
+openssl x509 -req -sha256 -in iPhoneActivation.csr -CA iPhoneCA.crt -CAkey iPhoneCA_private.key -out iPhoneActivation.crt -days 3653 -extfile extensions_activation.cnf -extensions v3_req  -set_serial 0x02 -passin pass:icloud
 REM --------
 REM Device
 REM openssl x509 -req -in cert-request.csr -CA iPhoneDeviceCA.crt -CAkey iPhoneDeviceCA_private.key -out serverCASigned.crt -days 3653 -extfile extensions_device.cnf -extensions usr_cert -CAcreateserial -passin pass:icloud
