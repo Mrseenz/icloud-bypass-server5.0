@@ -8,7 +8,7 @@ function loadSigningProfile($profileName)
 	$profileFile = $basePath.$safeName.'.json';
 
 	if (empty($safeName) || !file_exists($profileFile)) {
-		$profileFile = $basePath.'legacy.json';
+		$profileFile = $basePath.'modern.json';
 	}
 
 	$profile = json_decode(file_get_contents($profileFile), true);
@@ -47,7 +47,7 @@ function resolveOpenSslAlgorithm($algorithmName)
 		'OPENSSL_ALGO_SHA512' => OPENSSL_ALGO_SHA512,
 	);
 
-	return array_key_exists($algorithmName, $algorithms) ? $algorithms[$algorithmName] : OPENSSL_ALGO_SHA1;
+	return array_key_exists($algorithmName, $algorithms) ? $algorithms[$algorithmName] : OPENSSL_ALGO_SHA256;
 }
 
 $activation= (array_key_exists('activation-info-base64', $_POST) 
@@ -68,6 +68,9 @@ $decodedrequest = new DOMDocument;
 $decodedrequest->loadXML($activationDecoded);
 $nodes = $decodedrequest->getElementsByTagName('dict')->item(0)->getElementsByTagName('*');
 
+$imei = null;
+$imei2 = null;
+
 for ($i = 0; $i < $nodes->length - 1; $i=$i+2)
 {
 	#${$nodes->item($i)->nodeValue} = preg_match('/(true|false)/', $nodes->item($i + 1)->nodeName) ? $nodes->item($i + 1)->nodeName : $nodes->item($i + 1)->nodeValue;
@@ -80,6 +83,8 @@ for ($i = 0; $i < $nodes->length - 1; $i=$i+2)
 		case "SerialNumber": $serialNumber = $nodes->item($i + 1)->nodeValue; break;
 		case "UniqueDeviceID": $uniqueDiviceID = $nodes->item($i + 1)->nodeValue; break;
 		case "InternationalMobileEquipmentIdentity": $imei = $nodes->item($i + 1)->nodeValue; break;
+		case "InternationalMobileEquipmentIdentity2": $imei2 = $nodes->item($i + 1)->nodeValue; break;
+		case "SecondaryInternationalMobileEquipmentIdentity": $imei2 = $nodes->item($i + 1)->nodeValue; break;
 		case "InternationalMobileSubscriberIdentity": $imsi = $nodes->item($i + 1)->nodeValue; break;
 		case "IntegratedCircuitCardIdentity": $iccid = $nodes->item($i + 1)->nodeValue; break;
 		case "UniqueChipID": $ucid = $nodes->item($i + 1)->nodeValue; break;
@@ -145,10 +150,10 @@ $cert_sn = '0x02A590E676E2CEED3A99';
 
 # Device certificate request signing
 # for XAMPP
-#exec('c:\xampp\apache\bin\openssl.exe x509 -req -sha1 -in '.$devicefolder.'cert-request.csr -CA '.$certs_path.'iPhoneDeviceCA.crt -CAkey '.$certs_path.'iPhoneDeviceCA_private.key -out '.$devicefolder.'serverCASigned.crt -days '.
+#exec('c:\xampp\apache\bin\openssl.exe x509 -req -sha256 -in '.$devicefolder.'cert-request.csr -CA '.$certs_path.'iPhoneDeviceCA.crt -CAkey '.$certs_path.'iPhoneDeviceCA_private.key -out '.$devicefolder.'serverCASigned.crt -days '.
 #		$days.' -extfile '.$certs_path.'extensions_device.cnf -extensions usr_cert -set_serial '.$cert_sn.' -passin pass:'.$certs_pass);
 # for OpenServer
-exec('openssl x509 -req -sha1 -in '.$devicefolder.'cert-request.csr -CA '.$certs_path.'iPhoneDeviceCA.crt -CAkey '.$certs_path.'iPhoneDeviceCA_private.key -out '.$devicefolder.'serverCASigned.crt -days '.
+exec('openssl x509 -req -sha256 -in '.$devicefolder.'cert-request.csr -CA '.$certs_path.'iPhoneDeviceCA.crt -CAkey '.$certs_path.'iPhoneDeviceCA_private.key -out '.$devicefolder.'serverCASigned.crt -days '.
 		$days.' -extfile '.$certs_path.'extensions_device.cnf -extensions usr_cert -set_serial '.$cert_sn.' -passin pass:'.$certs_pass);
 
 $deviceCertificate=base64_encode(file_get_contents($devicefolder."serverCASigned.crt"));
@@ -160,7 +165,8 @@ $deviceCertificate=base64_encode(file_get_contents($devicefolder."serverCASigned
 $wildcardTicket=file_get_contents('certs/ext/wildcardticket.txt');
 $accountToken=
  '{'.(isset($imei) ? "\n\t".'"InternationalMobileEquipmentIdentity" = "'.$imei.'";' : '').
-	"\n\t".'"ActivityURL" = "https://albert.apple.com/deviceservices/activity";'.
+		(isset($imei2) ? "\n\t".'"InternationalMobileEquipmentIdentity2" = "'.$imei2.'";' : '').
+		"\n\t".'"ActivityURL" = "https://albert.apple.com/deviceservices/activity";'.
 	"\n\t".'"ActivationRandomness" = "'.$activationRandomness.'";'.
 	"\n\t".'"UniqueDeviceID" = "'.$uniqueDiviceID.'";'.
 	"\n\t".'"CertificateURL" = "https://albert.apple.com/deviceservices/certifyMe";'.
@@ -169,8 +175,8 @@ $accountToken=
 	"\n".
  '}';
 $accountTokenBase64=base64_encode($accountToken);
-$signingProfile = loadSigningProfile(array_key_exists('signing-profile', $_POST) ? $_POST['signing-profile'] : 'legacy');
-$signatureAlgorithmName = array_key_exists('signature_algorithm', $signingProfile) ? $signingProfile['signature_algorithm'] : 'OPENSSL_ALGO_SHA1';
+$signingProfile = loadSigningProfile(array_key_exists('signing-profile', $_POST) ? $_POST['signing-profile'] : 'modern');
+$signatureAlgorithmName = array_key_exists('signature_algorithm', $signingProfile) ? $signingProfile['signature_algorithm'] : 'OPENSSL_ALGO_SHA256';
 $signatureAlgorithm = resolveOpenSslAlgorithm($signatureAlgorithmName);
 $privateKeyPath = resolveProfilePath(array_key_exists('private_key', $signingProfile) ? $signingProfile['private_key'] : 'certs/signature_private.key');
 $privateKeyContents = file_get_contents($privateKeyPath);
@@ -224,6 +230,8 @@ $signatureMetadata = array(
 	'account_token_signature_sha256' => hash('sha256', $signature),
 	'certificate_fingerprint_sha256' => $certFingerprint,
 	'certificate_public_key_sha256' => $publicKeyFingerprint,
+	'imei_primary' => $imei,
+	'imei_secondary' => $imei2,
 	'verification_status' => 'verified',
 );
 
@@ -272,9 +280,10 @@ echo
 				<tr><td>ARND:</td><td>'.$activationRandomness.'</td></tr>
 				<tr><td>UDID:</td><td>'.$uniqueDiviceID.'</td></tr>
 				<tr><td>ASN:</td><td>'.(isset($serialNumber) ? $serialNumber : "-").'</td></tr>
-				<tr><td>UCID:</td><td>'.(isset($ucid) ? $ucid : "-").'</td></tr>								
+				<tr><td>UCID:</td><td>'.(isset($ucid) ? $ucid : "-").'</td></tr>							
 				<tr><td>ICCID:</td><td>'.(isset($iccid) ? $iccid : "-").'</td></tr>
-				<tr><td>IMEI:</td><td>'.(isset($imei) ? $imei : "-").'</td></tr>
+				<tr><td>IMEI-1:</td><td>'.(isset($imei) ? $imei : "-").'</td></tr>
+				<tr><td>IMEI-2:</td><td>'.(isset($imei2) ? $imei2 : "-").'</td></tr>
 				<tr><td>IMSI:</td><td>'.(isset($imsi) ? $imsi : "-").'</td></tr>
 				<tr><td>GUID:</td><td>'.(isset($guid) ? $guid : "-").'</td></tr>
 			</table>
