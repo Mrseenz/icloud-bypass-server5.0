@@ -1,9 +1,58 @@
 <?php
 include('tools/producttypes.php');
 
+function loadSigningProfile($profileName)
+{
+	$basePath = __DIR__.'/certs/profiles/';
+	$safeName = preg_replace('/[^a-z0-9_-]/i', '', strtolower((string)$profileName));
+	$profileFile = $basePath.$safeName.'.json';
+
+	if (empty($safeName) || !file_exists($profileFile)) {
+		$profileFile = $basePath.'legacy.json';
+	}
+
+	$profile = json_decode(file_get_contents($profileFile), true);
+	if (!is_array($profile)) {
+		exit('Invalid signing profile.');
+	}
+
+	return $profile;
+}
+
+function resolveProfilePath($path)
+{
+	if (preg_match('/^(?:[A-Za-z]:)?[\\\/]/', $path)) {
+		return $path;
+	}
+
+	return __DIR__.'/'.$path;
+}
+
+function getFirstPemCertificate($pemBundle)
+{
+	if (preg_match('/-----BEGIN CERTIFICATE-----[\s\S]+?-----END CERTIFICATE-----/', $pemBundle, $matches)) {
+		return $matches[0];
+	}
+
+	return '';
+}
+
+function resolveOpenSslAlgorithm($algorithmName)
+{
+	$algorithms = array(
+		'OPENSSL_ALGO_SHA1' => OPENSSL_ALGO_SHA1,
+		'OPENSSL_ALGO_SHA224' => OPENSSL_ALGO_SHA224,
+		'OPENSSL_ALGO_SHA256' => OPENSSL_ALGO_SHA256,
+		'OPENSSL_ALGO_SHA384' => OPENSSL_ALGO_SHA384,
+		'OPENSSL_ALGO_SHA512' => OPENSSL_ALGO_SHA512,
+	);
+
+	return array_key_exists($algorithmName, $algorithms) ? $algorithms[$algorithmName] : OPENSSL_ALGO_SHA1;
+}
+
 $activation= (array_key_exists('activation-info-base64', $_POST) 
 			  ? base64_decode($_POST['activation-info-base64']) 
-			  : array_key_exists('activation-info', $_POST) ? $_POST['activation-info'] : '');
+			  : (array_key_exists('activation-info', $_POST) ? $_POST['activation-info'] : ''));
 $guid = array_key_exists('guid', $_POST) ? $_POST["guid"] : '-';
 
 if(!isset($activation) || empty($activation)) { exit('Activation info not found!'); }
@@ -120,14 +169,65 @@ $accountToken=
 	"\n".
  '}';
 $accountTokenBase64=base64_encode($accountToken);
-$pkeyid = openssl_pkey_get_private(file_get_contents("certs/signature_private.key"));
+$signingProfile = loadSigningProfile(array_key_exists('signing-profile', $_POST) ? $_POST['signing-profile'] : 'legacy');
+$signatureAlgorithmName = array_key_exists('signature_algorithm', $signingProfile) ? $signingProfile['signature_algorithm'] : 'OPENSSL_ALGO_SHA1';
+$signatureAlgorithm = resolveOpenSslAlgorithm($signatureAlgorithmName);
+$privateKeyPath = resolveProfilePath(array_key_exists('private_key', $signingProfile) ? $signingProfile['private_key'] : 'certs/signature_private.key');
+$privateKeyContents = file_get_contents($privateKeyPath);
+$pkeyid = openssl_pkey_get_private($privateKeyContents);
 
-openssl_sign($accountTokenBase64, $signature, $pkeyid);
+if ($pkeyid === false) {
+	http_response_code(500);
+	exit('Failed to load account token signing key.');
+}
+
+openssl_sign($accountTokenBase64, $signature, $pkeyid, $signatureAlgorithm);
 openssl_free_key($pkeyid);
 # -------------------------------------------------------------------------------------------------
 
 $accountTokenSignature= base64_encode($signature);
-$accountTokenCertificateBase64 = 'LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0tCk1JSURaekNDQWsrZ0F3SUJBZ0lCQWpBTkJna3Foa2lHOXcwQkFRVUZBREI1TVFzd0NRWURWUVFHRXdKVlV6RVQKTUJFR0ExVUVDaE1LUVhCd2JHVWdTVzVqTGpFbU1DUUdBMVVFQ3hNZFFYQndiR1VnUTJWeWRHbG1hV05oZEdsdgpiaUJCZFhSb2IzSnBkSGt4TFRBckJnTlZCQU1USkVGd2NHeGxJR2xRYUc5dVpTQkRaWEowYVdacFkyRjBhVzl1CklFRjFkR2h2Y21sMGVUQWVGdzB3TnpBME1UWXlNalUxTURKYUZ3MHhOREEwTVRZeU1qVTFNREphTUZzeEN6QUoKQmdOVkJBWVRBbFZUTVJNd0VRWURWUVFLRXdwQmNIQnNaU0JKYm1NdU1SVXdFd1lEVlFRTEV3eEJjSEJzWlNCcApVR2h2Ym1VeElEQWVCZ05WQkFNVEYwRndjR3hsSUdsUWFHOXVaU0JCWTNScGRtRjBhVzl1TUlHZk1BMEdDU3FHClNJYjNEUUVCQVFVQUE0R05BRENCaVFLQmdRREZBWHpSSW1Bcm1vaUhmYlMyb1BjcUFmYkV2MGQxams3R2JuWDcKKzRZVWx5SWZwcnpCVmRsbXoySkhZdjErMDRJekp0TDdjTDk3VUk3ZmswaTBPTVkwYWw4YStKUFFhNFVnNjExVApicUV0K25qQW1Ba2dlM0hYV0RCZEFYRDlNaGtDN1QvOW83N3pPUTFvbGk0Y1VkemxuWVdmem1XMFBkdU94dXZlCkFlWVk0d0lEQVFBQm80R2JNSUdZTUE0R0ExVWREd0VCL3dRRUF3SUhnREFNQmdOVkhSTUJBZjhFQWpBQU1CMEcKQTFVZERnUVdCQlNob05MK3Q3UnovcHNVYXEvTlBYTlBIKy9XbERBZkJnTlZIU01FR0RBV2dCVG5OQ291SXQ0NQpZR3UwbE01M2cyRXZNYUI4TlRBNEJnTlZIUjhFTVRBdk1DMmdLNkFwaGlkb2RIUndPaTh2ZDNkM0xtRndjR3hsCkxtTnZiUzloY0hCc1pXTmhMMmx3YUc5dVpTNWpjbXd3RFFZSktvWklodmNOQVFFRkJRQURnZ0VCQUY5cW1yVU4KZEErRlJPWUdQN3BXY1lUQUsrcEx5T2Y5ek9hRTdhZVZJODg1VjhZL0JLSGhsd0FvK3pFa2lPVTNGYkVQQ1M5Vgp0UzE4WkJjd0QvK2Q1WlFUTUZrbmhjVUp3ZFBxcWpubTlMcVRmSC94NHB3OE9OSFJEenhIZHA5NmdPVjNBNCs4CmFia29BU2ZjWXF2SVJ5cFhuYnVyM2JSUmhUekFzNFZJTFM2alR5Rll5bVplU2V3dEJ1Ym1taWdvMWtDUWlaR2MKNzZjNWZlREF5SGIyYnpFcXR2eDNXcHJsanRTNDZRVDVDUjZZZWxpblpuaW8zMmpBelJZVHh0UzZyM0pzdlpEaQpKMDcrRUhjbWZHZHB4d2dPKzdidFcxcEZhcjBaakY5L2pZS0tuT1lOeXZDcndzemhhZmJTWXd6QUc1RUpvWEZCCjRkK3BpV0hVRGNQeHRjYz0KLS0tLS1FTkQgQ0VSVElGSUNBVEUtLS0tLQo=';
+$accountTokenCertificatePath = resolveProfilePath(array_key_exists('account_token_certificate_chain', $signingProfile) ? $signingProfile['account_token_certificate_chain'] : 'certs/ext/AccountTokenCertificate.crt');
+$accountTokenCertificatePem = file_get_contents($accountTokenCertificatePath);
+$accountTokenCertificateLeaf = getFirstPemCertificate($accountTokenCertificatePem);
+$accountTokenCertificateBase64 = base64_encode($accountTokenCertificatePem);
+
+if (empty($accountTokenCertificateLeaf)) {
+	http_response_code(500);
+	exit('Failed to parse account token certificate chain.');
+}
+
+$publicKey = openssl_pkey_get_public($accountTokenCertificateLeaf);
+$localVerifyResult = openssl_verify($accountTokenBase64, $signature, $publicKey, $signatureAlgorithm);
+
+if ($localVerifyResult !== 1) {
+	file_put_contents($devicefolder.'signature-verify-error.txt', openssl_error_string());
+	http_response_code(500);
+	exit('Failed to verify locally signed account token.');
+}
+
+$publicKeyDetails = openssl_pkey_get_details($publicKey);
+$publicKeyPem = is_array($publicKeyDetails) && array_key_exists('key', $publicKeyDetails) ? $publicKeyDetails['key'] : '';
+$publicKeyFingerprint = hash('sha256', $publicKeyPem);
+$certFingerprint = openssl_x509_fingerprint($accountTokenCertificateLeaf, 'sha256');
+$expectedPublicKeyFingerprint = array_key_exists('expected_public_key_sha256', $signingProfile) ? strtolower($signingProfile['expected_public_key_sha256']) : '';
+
+if (!empty($expectedPublicKeyFingerprint) && strtolower($publicKeyFingerprint) !== $expectedPublicKeyFingerprint) {
+	file_put_contents($devicefolder.'signature-verify-error.txt', 'Account token certificate public key fingerprint mismatch.');
+	http_response_code(500);
+	exit('Configured account token certificate does not match expected signing artifacts.');
+}
+
+$signatureMetadata = array(
+	'signing_profile' => array_key_exists('name', $signingProfile) ? $signingProfile['name'] : 'legacy',
+	'signature_algorithm' => $signatureAlgorithmName,
+	'signature_length' => strlen($signature),
+	'account_token_signature_sha256' => hash('sha256', $signature),
+	'certificate_fingerprint_sha256' => $certFingerprint,
+	'certificate_public_key_sha256' => $publicKeyFingerprint,
+	'verification_status' => 'verified',
+);
+
+file_put_contents($devicefolder.'signature-metadata.json', json_encode($signatureMetadata, JSON_PRETTY_PRINT));
 $fairPlayKeyData = 'LS0tLS1CRUdJTiBDT05UQUlORVItLS0tLQpBQUVBQVIvcWRpY3lUdWJtMmxKTndMV1ZaT0xQSnpTSWF1MGJuT1lPSE10alZxc242dTFuY0Urb0ZQNkQ3VjNWCmplekJxQWNhRVpxUGNOT09yK3hFM2NkL1I0K1Q4OHMwSitFa0pQNnRPZzQ5U215ZkZUMlg0UDdYZExTNndEalAKY3piRmRDU0hpTVZmREJhY1pUaWxPNGNsdHllS3JzZHpLTlI5L3J5VXQ4TnJkY0VJd2lHWTBjYjNpcExLUnhHUwpYSWFMMnpYMy9HeE14UW0yRzdzL0IvWDBkdWEwd084enB6ZXE1bHkwc1lPQjE5cUdwaytKQ0hSaUtyUC9neFRaClJjZC9tTjVaM25WUEY4Qld2VEQ5UElvYldDZENxc3dCZzBvK1VyNnExZHFsZEpPM0FSOEFWTzFLUEFrVC8wV1QKdkR0MFpBbDJod3JEclpXdHJSd3RDNUlXZi9DY2UwaDZ0UXB4bDM3akFBWkdqcWNFM3F5dG4rdmh1SVQ2WklTUQpyK2x0T1B0Mk5vK3plVFh2TVExalJWUXlyRzFCNzRMWEpGcU1nQytGZGgzMDYvamRoMEtkeEVoeHdHanR4VGpICk5YRkhhV2Y0Nm9UaGVmWTBDM3NSclh1cENRSjg1ODNiRWFuUG8yUk1FL1dkY0pDODJFeEZma3FGRjNPSkU5dy8KV2w3NkFUZlVGaUVYRUFpUHVOQXk4Zlhhazk0Y3FyREhXeS9YbTFRV0o3Rnd4eDYzM2RnUXBFVWExSjBMaTNYZwpqaWJmczZQdDdpUkUzK3ZhTWViVW1BajZWZnczUjBQL253SzhzNnhubDJ1MUZsdEdXTkQxRWdoRVNEM1ExRk5mCkxlVWpOL1gwVmE0TEFzU0tGZ2NPSlloRi9renRLUFFqd0ZVNVFtd1FSeUI3aVhHM3lDbmdFZml6d3hhVEtUQzUKRmZFbi8xa3JlYndtOGZ3bW04NjllL3ZhTk81K285MFFibG9weDNUbnFRUWwyalYyZjhoa3FlYTlpUWRoL0JlTwpLUjVmcjR0bW9PSGNuUS9tRVNVZEUwdUcrRjhteGRBNVlUTzRhaElzaEZZajlEZzFVQkQvNGZHdWxkaCszZU50CkJQUVVveG5jTWd5VnFMMFRjaE90TXFOc3NnYkZXemUwRHBiMWU3OVVHUlJqdXN0QmlFTG9vY2s4amxtRWdwclgKZ3dLSmU5dkVqMDQ3Y2FUS2NSci9zKzN3b1ZkUWNQNDdZVEw0aVZKZ01jRHlZRFNGYk5lc3JXdlZ1KzhPZlJ0SwpUSEM0T2xQTmZWRTNXNXQyRWYwL0JlVERnL0FiUzUrSWNhSDdpeUhVZWRHWmxkRHpCWnhRMzdRRUNaYUZpUnpiCksrZWNXbWNMOXk3QnRoNGtaV3hJOE9vSzc3akQrb1JmWlVIZHM5OXNWbnNGZVRuQUVyL0RzaXVwTnlTRzZSdEcKVXJpOWZnRUYzUjJEb0lWaTlxQjdIUmJnM1VFTnZORlVFSVQ4VTdkb1lFVFBJSEVCUlVUU3k0MnhvbnVKNmxCNgpuOEEzaVpBTkR3N2ZzZWJUVzF6bnZuYmJGcC81YUhzMFJVNmNRenBTRlRIanRKb1hSQ091Y2RBRDNmY3VhMWhYCk14WENYV0drWDJOZnA2OFQvV0J4K0tlTDB0NGRFOXZrVnV4aEhjTjFZYS95OWZ2eFZZQmpSSVBEQXNBSGFhUnMKY05oZUdpTFNCTWh0Ui9kblVUMnA1aHhDRWNobnRjSTI5K21mYlV2VXIydVNrV3I4dFJVV0I0YjFZdmlVbUJScQpuQUV4L29WRHJlTDcvMnUxY0FhaHRhYWdaanBRUzlBNmhBSHA4RWVJNkg5dnZxcUtHMXY0TW9qa3NnalNlWDBuCnRWcHl0Yjg4TFZxNHRRNmp6U21BcXNzbmRzNmgwZzZCUHpFSWxFdDlLWWZLeURhbXZyOXM0czRZaldDcEgxT2UKL2ZMbEhYUzRURUMwOXdUYnpjQWw4dmZqUFpMdmpnMURyalZsUWU5K1FINGgrMElECi0tLS0tRU5EIENPTlRBSU5FUi0tLS0tCg==';
 #$fairPlayKeyData = base64_encode(file_get_contents('certs/ext/FairPlayKeyData.pem'));
 #$accountTokenCertificateBase64 = base64_encode(file_get_contents('certs/ext/AccountTokenCertificate.crt');
