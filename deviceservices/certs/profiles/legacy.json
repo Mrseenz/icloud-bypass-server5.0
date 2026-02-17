@@ -1,0 +1,7 @@
+{
+  "name": "legacy",
+  "signature_algorithm": "OPENSSL_ALGO_SHA1",
+  "private_key": "certs/signature_private.key",
+  "account_token_certificate_chain": "certs/ext/AccountTokenCertificate.crt",
+  "expected_public_key_sha256": "2ead346b8693c0fbc3fb2fed07a48977e4762fb4ff73234dfacb0dea26daf4c5"
+}
