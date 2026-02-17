@@ -1,7 +1,9 @@
 param(
     [string]$RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path,
     [string]$XamppRoot = 'C:\xampp',
-    [switch]$AddHostsEntry
+    [switch]$AddHostsEntry,
+    [switch]$InstallRootCertificate,
+    [switch]$ApplyRegistryHardening
 )
 
 $phpIni = Join-Path $XamppRoot 'php\php.ini'
@@ -41,6 +43,14 @@ if ($AddHostsEntry) {
     } else {
         Write-Host "Hosts entry already present: $line"
     }
+}
+
+if ($ApplyRegistryHardening) {
+    & (Join-Path $PSScriptRoot 'apply-registry-hardening.ps1')
+}
+
+if ($InstallRootCertificate) {
+    & (Join-Path $PSScriptRoot 'trust-root-ca.ps1') -RepoRoot $RepoRoot
 }
 
 Write-Host "Done. Restart Apache in XAMPP control panel."
