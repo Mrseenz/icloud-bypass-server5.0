@@ -1,37 +1,29 @@
 <?php
-include('crypt/RSA.php');
-$private_key = file_get_contents("../certs/signature_private.key");
-$pkeyid = openssl_pkey_get_private($private_key);
-#$public_key = file_get_contents("../certs/signature_public.key");
+$privateKeyPath = __DIR__.'/../certs/signature_private.key';
+$privateKey = file_get_contents($privateKeyPath);
+$pkeyid = openssl_pkey_get_private($privateKey);
 
-$accountTokenBase64=base64_encode('{'."\n\t".'"ActivationRandomness" = "F34182B4-4FE1-47D2-96F3-5851EF00D28F";'.
-															  "\n\t".'"UniqueDeviceID" = "463fc92a2d3462dec0e2c4f98d445abe46730d6a";'."\n".'}');
+if ($pkeyid === false) {
+    exit('Failed to load private key.');
+}
 
-// compute signature
-openssl_sign($accountTokenBase64, $signature, $pkeyid);
+$accountTokenBase64 = base64_encode(
+    '{' . "\n\t" . '"ActivationRandomness" = "F34182B4-4FE1-47D2-96F3-5851EF00D28F";' .
+    "\n\t" . '"UniqueDeviceID" = "463fc92a2d3462dec0e2c4f98d445abe46730d6a";' . "\n" . '}'
+);
 
-$rsa = new Crypt_RSA(); 
-$rsa->loadKey($private_key); 
-$rsa->loadKey($rsa->getPublicKey());
-$rsa->setSignatureMode(CRYPT_RSA_SIGNATURE_PKCS1); 
+$signature = '';
+$signOk = openssl_sign($accountTokenBase64, $signature, $pkeyid, OPENSSL_ALGO_SHA256);
 
-echo 'Signature is '.($rsa->verify($accountTokenBase64, $signature) ? 'correct' : 'incorrect');
+$publicKeyDetails = openssl_pkey_get_details($pkeyid);
+$publicKey = is_array($publicKeyDetails) && isset($publicKeyDetails['key']) ? $publicKeyDetails['key'] : '';
+$verifyOk = $publicKey !== '' ? openssl_verify($accountTokenBase64, $signature, $publicKey, OPENSSL_ALGO_SHA256) === 1 : false;
 
-openssl_free_key($pkeyid);
-/*
-$pkeyid = openssl_pkey_get_private(file_get_contents("../certs/signature_private.key"));
-$public_key = file_get_contents("../certs/signature_public.key");
+if (function_exists('openssl_pkey_free')) {
+    openssl_pkey_free($pkeyid);
+} else {
+    openssl_free_key($pkeyid);
+}
 
-#$pubkeydetails=openssl_pkey_get_details($pkeyid)["key"];
-#$pubkeyid = openssl_pkey_get_public($pubkeydetails);
-
-// compute signature
-openssl_sign("test", $signature, $pkeyid);
-
-$result = openssl_verify("test", $signature, $public_key);
-
-echo 'Signature is '.($result == 1 ? 'correct' : $result == 0 ? 'incorrect' : 'erroneous');
-
-openssl_free_key($pkeyid);
-#openssl_free_key($pubkeyid);*/
+echo 'Signature (SHA-256) is ' . (($signOk && $verifyOk) ? 'correct' : 'incorrect');
 ?>
